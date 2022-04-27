@@ -6,11 +6,18 @@
 mod pattern_matching;
 mod stack_and_heap;
 
+extern crate rand;
+use rand::Rng;
 use rand::prelude::*;
+
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::stdin;
 use std::mem;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 const MEANING_OF_LIFE: u8 = 42;
 static STATIC_MEANING_OF_LIFE: i32 = 42;
@@ -927,21 +934,14 @@ fn drop_trait() {
 }
 
 use std::{
-    cmp::{
-        Eq,
-        PartialEq
-    },
-    ops::{
-        Add, 
-        AddAssign, 
-        Neg
-    }
+    cmp::{Eq, PartialEq},
+    ops::{Add, AddAssign, Neg},
 };
 fn operator_overload_via_trait() {
-    #[derive(Debug/*, PartialEq, Eq, PartialOrd, Ord*/)]
+    #[derive(Debug /*, PartialEq, Eq, PartialOrd, Ord*/)]
     struct Complex<T> {
         re: T,
-        im: T
+        im: T,
     }
     impl<T> Complex<T> {
         fn new(re: T, im: T) -> Complex<T> {
@@ -955,22 +955,37 @@ fn operator_overload_via_trait() {
     //        Complex { re: self.re + rhs.re, im: self.im + rhs.im }
     //    }
     //}
-    impl<T> Add for Complex<T> where T: Add<Output = T> {
+    impl<T> Add for Complex<T>
+    where
+        T: Add<Output = T>,
+    {
         type Output = Complex<T>;
         fn add(self, rhs: Self) -> Self::Output {
-            Complex { re: self.re + rhs.re, im: self.im + rhs.im }
+            Complex {
+                re: self.re + rhs.re,
+                im: self.im + rhs.im,
+            }
         }
     }
 
     let complex1 = Complex::new(1, 1);
     let complex2 = Complex::new(2, 2);
-    println!("Overload traits: Sum of two complex values is {:?}", complex1 + complex2);
+    println!(
+        "Overload traits: Sum of two complex values is {:?}",
+        complex1 + complex2
+    );
 
     let complex3 = Complex::new(3.0, 3.0);
     let complex4 = Complex::new(4.0, 4.0);
-    println!("Overload traits: Sum of two complex values is {:?}", complex3 + complex4);
+    println!(
+        "Overload traits: Sum of two complex values is {:?}",
+        complex3 + complex4
+    );
 
-    impl<T> AddAssign for Complex<T> where T: AddAssign<T> {
+    impl<T> AddAssign for Complex<T>
+    where
+        T: AddAssign<T>,
+    {
         fn add_assign(&mut self, rhs: Self) {
             self.re += rhs.re;
             self.im += rhs.im;
@@ -979,22 +994,36 @@ fn operator_overload_via_trait() {
     let mut complex5 = Complex::new(5.0, 5.0);
     let complex6 = Complex::new(6.0, 6.0);
     complex5 += complex6;
-    println!("Overload traits: Add assign of next complex values is {:?}", complex5);
+    println!(
+        "Overload traits: Add assign of next complex values is {:?}",
+        complex5
+    );
 
-    impl<T> Neg for Complex<T> where T: Neg<Output = T> {
+    impl<T> Neg for Complex<T>
+    where
+        T: Neg<Output = T>,
+    {
         type Output = Complex<T>;
         fn neg(self) -> Self::Output {
-            Complex { re: -self.re, im: -self.im }
+            Complex {
+                re: -self.re,
+                im: -self.im,
+            }
         }
     }
-    println!("Overload traits: Inverse (neg) previous complex values is {:?}", -complex5);
+    println!(
+        "Overload traits: Inverse (neg) previous complex values is {:?}",
+        -complex5
+    );
 
     // you can't support "full equality" trait for f32 cuz you'll get NAN infection,
     // where some value can become NAN (Not A Number) after 0/0 or inf/inf.
     // The problem here is you'll get NAN == NAN = false and NAN * x = NAN
 
     // So you have to support "partial equality"
-    impl<T> PartialEq for Complex<T> where T: PartialEq
+    impl<T> PartialEq for Complex<T>
+    where
+        T: PartialEq,
     {
         fn eq(&self, rhs: &Self) -> bool {
             self.re == rhs.re && self.im == rhs.im
@@ -1003,13 +1032,540 @@ fn operator_overload_via_trait() {
     let complex7 = Complex::new(7, 7);
     let complex8 = Complex::new(8, 8);
     println!("Overload traits: Are they equal? {}", complex7 == complex8);
-    
-    impl<T: Eq> Eq for Complex<T> where T: Eq
-    {
-    }
+
+    impl<T: Eq> Eq for Complex<T> where T: Eq {}
     let complex9_1 = Complex::new(9, 9);
     let complex9_2 = Complex::new(9, 9);
-    println!("Overload traits: Are they equal? {}", complex9_1 == complex9_2);
+    println!(
+        "Overload traits: Are they equal? {}",
+        complex9_1 == complex9_2
+    );
+}
+
+fn dispatch() {
+    trait Printable {
+        fn format(&self) -> String;
+    }
+    impl Printable for i32 {
+        fn format(&self) -> String {
+            format!("i32: {}", *self)
+        }
+    }
+    impl Printable for String {
+        // hehe, why not?
+        fn format(&self) -> String {
+            format!("String: {}", *self)
+        }
+    }
+
+    let i1 = 123;
+    let s1 = "hello".to_string();
+    println!("Dispatch: {}, {}", i1.format(), s1.format());
+
+    // Monomorphisation. Static dispatch (abstract from data)
+    // Faster
+    fn print_it_static_dispatch<T>(z: T)
+    where
+        T: Printable,
+    {
+        println!("Static Dispatch: {}", z.format());
+    }
+    let i2 = 123;
+    let s2 = "hello".to_string();
+    print_it_static_dispatch(i2);
+    print_it_static_dispatch(s2);
+
+    // Dynamic dispatch (parameter is ref - raw int ptr to data)
+    // This function use vtable to find proper .format() to call
+    fn print_it_dynamic_dispatch(z: &dyn Printable) {
+        println!("Dynamic Dispatch: {}", z.format());
+        trait Printable {
+            fn format(&self) -> String;
+        }
+        impl Printable for i32 {
+            fn format(&self) -> String {
+                format!("i32: {}", *self)
+            }
+        }
+        impl Printable for String {
+            // hehe, why not?
+            fn format(&self) -> String {
+                format!("String: {}", *self)
+            }
+        }
+    }
+    let i3 = 123;
+    let s3 = "hello".to_string();
+    print_it_dynamic_dispatch(&i3 as &dyn Printable);
+    print_it_dynamic_dispatch(&s3);
+
+    struct Circle {
+        radius: f64,
+    }
+    struct Square {
+        side: f64,
+    }
+    trait Shape {
+        fn area(&self) -> f64;
+    }
+    impl Shape for Circle {
+        fn area(&self) -> f64 {
+            std::f64::consts::PI * self.radius * self.radius
+        }
+    }
+    impl Shape for Square {
+        fn area(&self) -> f64 {
+            self.side * self.side
+        }
+    }
+    let shapes: [&dyn Shape; 4] = [
+        &Circle { radius: 1.0 },
+        &Square { side: 2.0 },
+        &Circle { radius: 3.0 },
+        &Square { side: 4.0 },
+    ];
+    for (i, shape) in shapes.iter().enumerate() {
+        println!(
+            "Dynamic Dispatch: Static array of dyn refs: Shape number {} has area {}",
+            i,
+            shape.area()
+        );
+    }
+
+    let mut shapes_enum = Vec::new();
+    //shapes_enum.push(Circle { radius: 1.0 });
+    //shapes_enum.push(Square { side: 1.0 }); // ERROR: Circle required
+
+    enum ShapeType {
+        Circle(Circle),
+        Square(Square),
+    }
+    // We're encapsulating info ENUM, lol
+    shapes_enum.push(ShapeType::Circle(Circle { radius: 5.0 }));
+    shapes_enum.push(ShapeType::Square(Square { side: 6.0 }));
+
+    for s in shapes_enum {
+        match s {
+            ShapeType::Circle(circle) => println!(
+                "Dynamic Dispatch: Enum encapsulation vec: Circle has area {}",
+                circle.area()
+            ),
+            ShapeType::Square(square) => println!(
+                "Dynamic Dispatch: Enum encapsulation vec: Square has area {}",
+                square.area()
+            ),
+        }
+    }
+
+    let mut shapes_boxed: Vec<Box<dyn Shape>> = Vec::new();
+    shapes_boxed.push(Box::new(Circle { radius: 7.0 }));
+    shapes_boxed.push(Box::new(Square { side: 8.0 }));
+    for s in shapes_boxed {
+        println!("Dynamic Dispatch: Boxed vec: Circle has area {}", s.area());
+    }
+}
+
+fn ownership_and_borrowing() {
+    // Ownership
+    let vector1 = vec![1, 2, 3]; // Variable 'vector' storing data. Resources is in heap. Vector bounds to resources.
+    let vector2 = vector1; // Ownership is moved. Can't use vector1 more
+
+    let foo = |v: Vec<i32>| (); // If you pass vector1 here, it grabs it and it'll not be usable more
+
+    let int1 = 1; // value on stack
+    let int2 = int1; // copy value
+
+    let int3 = Box::new(1); // value in heap
+
+    let foo = |v: Vec<i32>| -> Vec<i32> {
+        v // Value returned and can be used again
+    };
+    let vector2 = foo(vector2);
+    println!("Ownership: Can use vector again: {:?}", vector2);
+
+    let foo = |v: &Vec<i32>| {}; // it don't modify, just use it. No borrowing
+
+    // Borrowing
+    let print_vector = |v: &Vec<i32>| {
+        println!("Borrowing: x[0] = {}", v[0]);
+    };
+    let v = vec![3, 2, 1];
+    //print_vector(vec); //taking ownership
+    print_vector(&v); // taking over - borrowing (returned after usage), immutable ref
+
+    let mut mutable_int = 40;
+    // let ref_to_int = &a; // error
+    {
+        let mutable_int_ref = &mut mutable_int; // reference to mutable int, borrowing
+        *mutable_int_ref += 2;
+    } // scope remove borrowing (example not actual in Rust 1.60)
+
+    println!("Borrowing: mutable_int = {}", mutable_int);
+    for i in &v {
+        println!("i = {}", i);
+        // z.push(5); // error not allowed
+    }
+}
+
+fn lifetime() {
+    //&'static str // variable lives as long as program do
+    struct Person {
+        name: String,
+    }
+
+    impl Person {
+        //fn get_ref_name(&self) -> &String { // object might be killed
+
+        // So you linking lifetime of object with lifetime of returned string! Omg
+        fn get_ref_name<'lifetime>(&'lifetime self) -> &'lifetime String {
+            &self.name
+        }
+    }
+
+    // expected named lifetime parameter without <'lifetime>. It means "same lifetime"!
+    // you'll get problems where person expires early
+    struct Company<'lifetime> {
+        name: String,
+        ceo: &'lifetime Person,
+    }
+
+    let elon_musk = Person {
+        name: String::from("Elon Musk"),
+    };
+    let tesla = Company {
+        name: String::from("Tesla"),
+        ceo: &elon_musk,
+    };
+
+    let mut john_name: &String;
+    {
+        let john = Person {
+            name: String::from("John"),
+        };
+        john_name = john.get_ref_name(); // lifetime elision might happens without <'lifetime>
+    }
+}
+
+fn lifetime_in_structure_implementation() {
+    // struct Person { // expect lifetime specifier for name
+    struct Person<'lifetime> {
+        name: &'lifetime str,
+    }
+    impl<'lifetime> Person<'lifetime> {
+        fn talk(&self) {
+            println!("Lifetime: Hi, my name is {}", self.name);
+        }
+    }
+
+    let person = Person { name: "John" };
+    person.talk();
+}
+
+fn reference_counting() {
+    struct Person {
+        name: Rc<String>,
+    }
+
+    impl Person {
+        fn new(name: Rc<String>) -> Person {
+            Person { name: name }
+        }
+
+        fn greet(&self) {
+            println!("RefCount: Hi, my name is {}", self.name);
+        }
+    }
+
+    let name = Rc::new("John".to_string());
+    println!(
+        "RefCount: Name = {} has {} strong pointers",
+        name,
+        Rc::strong_count(&name)
+    ); // already 1 for owner
+    {
+        let person = Person::new(name.clone());
+        person.greet();
+        println!(
+            "RefCount: Name = {} has {} strong pointers",
+            name,
+            Rc::strong_count(&name)
+        );
+    }
+    println!(
+        "RefCount: Name = {} has {} strong pointers",
+        name,
+        Rc::strong_count(&name)
+    );
+    println!("RefCount: I see man named {}", name.clone());
+}
+
+fn atomic_reference_counting() {
+    struct ThreadPerson {
+        name: Arc<String>, // atomic reference counter
+    }
+
+    impl ThreadPerson {
+        fn new(name: Arc<String>) -> ThreadPerson {
+            ThreadPerson { name: name }
+        }
+
+        fn greet(&self) {
+            println!("AtomicRefCount: Hi, my name is {}", self.name);
+        }
+    }
+
+    let name = Arc::new("Thread-John".to_string());
+    let person = ThreadPerson::new(name.clone());
+
+    // rc class is not thread-safe
+    let thread1 = thread::spawn(move || {
+        person.greet();
+    });
+    println!("AtomicRefCount: I see man named {}", name);
+    thread1.join().unwrap();
+}
+
+fn mutex() {
+    struct ThreadPerson {
+        name: Arc<String>,
+        state: Arc<Mutex<String>>,
+    }
+    impl ThreadPerson {
+        fn new(name: Arc<String>, state: Arc<Mutex<String>>) -> ThreadPerson {
+            ThreadPerson {
+                name: name,
+                state: state,
+            }
+        }
+
+        fn greet(&self) {
+            // need to use mutex - mutual exclusion
+            let mut state = self.state.lock().unwrap();
+            state.clear();
+            state.push_str("Excited");
+
+            println!(
+                "RefCount: Hi, my name is {} and my state is {}",
+                self.name,
+                state.as_str()
+            );
+        }
+    }
+
+    let name = Arc::new("Thread-John".to_string());
+    let state = Arc::new(Mutex::new("Bored".to_string()));
+    let person = ThreadPerson::new(name.clone(), state.clone());
+
+    let thread1 = thread::spawn(move || {
+        person.greet();
+    });
+    println!(
+        "RefCount: I see man named {} in {} state",
+        name,
+        state.lock().unwrap().as_str()
+    );
+    thread1.join().unwrap();
+}
+
+fn circular_references() {
+    /* not works
+    struct Student<'lifetime> {
+        name: String,
+        courses: Vec<&'lifetime Course<'lifetime>>
+    }
+
+    struct Course<'lifetime> {
+        name: String,
+        students: Vec<&'lifetime Student<'lifetime>>
+    }
+
+    impl<'lifetime> Student<'lifetime> {
+        fn new(name: &str) -> Student<'lifetime> {
+            Student {
+                name: name.into(),
+                courses: Vec::new()
+            }
+        }
+    }
+
+    impl<'lifetime> Course<'lifetime> {
+        fn new(name: &str) -> Course<'lifetime> {
+            Course {
+                name: name.into(),
+                students: Vec::new()
+            }
+        }
+
+        fn add_student(&'lifetime mut self, student: &'lifetime mut Student<'lifetime>) {
+            student.courses.push(self);
+            self.students.push(student);
+        }
+    }
+
+    let john = Student::new("John");
+    let course = Course::new("Rust Course");
+    course.add_student(john);
+    */
+
+    /* works, but looks ugly
+    struct Student {
+        name: String,
+        courses: Vec<Rc<RefCell<Course>>>
+    }
+
+    struct Course {
+        name: String,
+        students: Vec<Rc<RefCell<Student>>>
+    }
+
+    impl Student {
+        fn new(name: &str) -> Student {
+            Student {
+                name: name.into(),
+                courses: Vec::new()
+            }
+        }
+    }
+
+    impl Course {
+        fn new(name: &str) -> Course {
+            Course {
+                name: name.into(),
+                students: Vec::new()
+            }
+        }
+    }
+
+    fn add_student(course: Rc<RefCell<Course>>, student: Rc<RefCell<Student>>) {
+        student.borrow_mut().courses.push(course.clone());
+        course.borrow_mut().students.push(student.clone());
+    }
+
+    let john = Rc::new(RefCell::new(Student::new("John")));
+    let jane = Rc::new(RefCell::new(Student::new("Jane")));
+    let course = Rc::new(RefCell::new(Course::new("Rust Course")));
+    add_student(course.clone(), john.clone());
+    add_student(course.clone(), jane.clone());
+     */
+
+    // redesign you program to better structure
+    struct Student {
+        name: String,
+    }
+
+    struct Course {
+        name: String,
+    }
+
+    struct Enrollment<'lifetime> {
+        student: &'lifetime Student,
+        course: &'lifetime Course,
+    }
+
+    struct Platform<'lifetime> {
+        enrollments: Vec<Enrollment<'lifetime>>,
+    }
+
+    impl Student {
+        fn new(name: &str) -> Student {
+            Student { name: name.into() }
+        }
+
+        fn courses(&self, platform: Platform) -> Vec<String> {
+            platform.enrollments
+                .iter()
+                .filter(|&e| e.student.name == self.name)
+                .map(|e| e.course.name.clone())
+                .collect()
+        }
+    }
+
+    impl Course {
+        fn new(name: &str) -> Course {
+            Course { name: name.into() }
+        }
+    }
+
+    impl<'lifetime> Enrollment<'lifetime> {
+        fn new(student: &'lifetime Student, course: &'lifetime Course) -> Enrollment<'lifetime> {
+            Enrollment { student, course }
+        }
+    }
+
+    impl<'lifetime> Platform<'lifetime> {
+        fn new() -> Platform<'lifetime> {
+            Platform {
+                enrollments: Vec::new(),
+            }
+        }
+
+        fn enroll(&mut self, student: &'lifetime Student, course: &'lifetime Course) {
+            self.enrollments.push(Enrollment::new(student, course));
+        }
+    }
+
+    let john = Student::new("John");
+    let jane = Student::new("Jane");
+    let course = Course::new("Rust Course");
+
+    let mut platform = Platform::new();
+    platform.enroll(&john, &course);
+    platform.enroll(&jane, &course);
+
+    for course_name in john.courses(platform) {
+        println!("CircularReferences: {} is taking course {}", john.name, course_name);
+    }
+}
+
+fn threads(){
+    print!("Threads: ");
+    let handle = thread::spawn(|| {
+        for _ in 1..10 {
+            print!("+");
+            thread::sleep(core::time::Duration::from_millis(300));
+        }
+    });
+    for _ in 1..10 {
+        print!("-");
+        thread::sleep(core::time::Duration::from_millis(300));
+    }
+    handle.join(); // -++--+-+-++--++-+- or any other sequence
+}
+
+fn consuming_crates() {
+    // https://crates.io/
+    let mut rng = rand::thread_rng();
+    let rand_float: f32 = rng.gen();
+    let rand_bool: f32 = rng.gen();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    //#[should_panic] // panic anyway... why?
+    //#[ignore] // don't run test
+    fn testing() {
+        let english_greeting = String::from("hello");
+        assert_eq!("hello", english_greeting);
+
+        // just use 'cargo test'
+    }
+}
+
+///This is documented module. You can use markdown
+/// 
+///# Examples
+///```rs
+///let username = "John";
+///println!("His name is {}", username);
+///```
+///
+mod documented {
+    /// This is documented method
+    pub fn documentation() -> String {
+        // type 'rustdoc src/main.rs' to make docs
+        "John".to_string()
+    }
 }
 
 fn main() {
@@ -1044,7 +1600,17 @@ fn main() {
     //traits_as_parameters();
     //into_trait();
     //drop_trait();
-    operator_overload_via_trait();
+    //operator_overload_via_trait();
+    //dispatch();
+    //ownership_and_borrowing();
+    //lifetime();
+    //lifetime_in_structure_implementation();
+    //reference_counting();
+    //atomic_reference_counting();
+    //mutex();
+    //circular_references();
+    //threads();
+    //consuming_crates();
 
     //pattern_matching::execute();
 
